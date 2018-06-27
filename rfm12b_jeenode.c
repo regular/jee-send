@@ -47,13 +47,14 @@
 #include <errno.h>
 #include <unistd.h>
 #include <sys/select.h>
+#include <stropts.h>
 
 #include "common/common.h"
 #include "rfm12b_config.h"
 #include "rfm12b_ioctl.h"
 #include "rfm12b_jeenode.h"
 
-#define JEENODE_ID      12
+#define JEENODE_ID      13
 #define GROUP_ID        19
 
 #define RF12_MAX_RLEN   128
@@ -100,7 +101,7 @@ int main(int argc, char** argv)
    fd_set fds;
    
    if (set_nonblock_fd(STDIN_FILENO)) {
-      printf("\nfailed to set non-blocking I/O on stdin: %s.\n\n",
+      fprintf(stderr, "\nfailed to set non-blocking I/O on stdin: %s.\n\n",
          strerror(errno));
       return -1;
    }
@@ -109,16 +110,16 @@ int main(int argc, char** argv)
    
    rfm12_fd = open(RF12_TESTS_DEV, O_RDWR);
    if (rfm12_fd < 0) {
-      printf("\nfailed to open %s: %s.\n\n", devname, strerror(errno));
+      fprintf(stderr, "\nfailed to open %s: %s.\n\n", devname, strerror(errno));
       return rfm12_fd;
    } else {
       if (set_nonblock_fd(rfm12_fd)) {
-         printf("\nfailed to set non-blocking I/O on %s: %s.\n\n",
+         fprintf(stderr, "\nfailed to set non-blocking I/O on %s: %s.\n\n",
             devname, strerror(errno));
          return -1;
       }
    
-      printf(
+      fprintf(stderr,
          "\nsuccessfully opened %s as fd %i.\n\n",
          devname, rfm12_fd
       );
@@ -137,28 +138,28 @@ int main(int argc, char** argv)
    ioctl_err |= ioctl(rfm12_fd, RFM12B_IOCTL_SET_JEEMODE_AUTOACK, &send_ack);
    
    if (ioctl_err) {
-      printf("\nioctl() error: %s.\n", strerror(errno));
+      fprintf(stderr, "\nioctl() error: %s.\n", strerror(errno));
       return -1;
    }
 
    // set group id
    if (ioctl(rfm12_fd, RFM12B_IOCTL_SET_GROUP_ID, &group_id)) {
-      printf("\nioctl() error while setting group id: %s.\n",
+      fprintf(stderr, "\nioctl() error while setting group id: %s.\n",
          strerror(errno));
       return -1;
    }
    
    // activate jeenode-compatible mode by giving this module a jeenode id
    if (ioctl(rfm12_fd, RFM12B_IOCTL_SET_JEE_ID, &jee_id)) {
-      printf("\nioctl() error while setting jeenode id: %s.\n",
+      fprintf(stderr, "\nioctl() error while setting jeenode id: %s.\n",
          strerror(errno));
       return -1;
    }
 
-   printf("RFM12B configured to GROUP %i, BAND %i, BITRATE: 0x%.2x, JEE ID: %d\n\n",
+   fprintf(stderr, "RFM12B configured to GROUP %i, BAND %i, BITRATE: 0x%.2x, JEE ID: %d\n\n",
       group_id, band_id, bit_rate, jee_id);
    
-   printf("ready, type something to send it as broadcast + ACK request.\n\n");
+   fprintf(stderr, "ready, type something to send it as broadcast + ACK request.\n\n");
    
    running = 1;
    ipos = 2;
@@ -170,11 +171,13 @@ int main(int argc, char** argv)
       nfds = select(rfm12_fd+1, &fds, NULL, NULL, NULL);
             
       if (nfds < 0 && running) {
-         printf("\nan error happened during select: %s.\n\n",
+         fprintf(stderr, "\nan error happened during select: %s.\n\n",
             strerror(errno));
          return -1;
+      } else if (nfds == 0) {
+         // when select() returns 0, nothing is readable.
+         fprintf(stderr, "\nNothing is readable.");
       } else if (nfds > 0) {
-         // we ignore when select() returns 0, e.g. nothing is readable.
          if (FD_ISSET(STDIN_FILENO, &fds)) {
             // we can read from stdin, so read each available character until
             // we run out of space or get a \n, which means we should send
@@ -197,27 +200,32 @@ int main(int argc, char** argv)
                   len = write(rfm12_fd, ibuf, ipos);
                   
                   if (len < 0) {
-                     printf("\nerror while sending: %s.\n\n",
+                     fprintf(stderr, "\nerror while sending: %s.\n\n",
                         strerror(errno));
                      return -1;
                   }
                   
                   ibuf[len] = '\0';
-                  printf(SEND_COLOR "<SENT CTL:0 ACK:1 DST:0 ADDR:%d LEN:%d>" STOP_COLOR " %s\n",
+                  fprintf(stderr, SEND_COLOR "<SENT CTL:0 ACK:1 DST:0 ADDR:%d LEN:%d>" STOP_COLOR " %s\n",
                      jee_id, ipos-2, ibuf+2);
                   ipos = 2;
                } else if (ipos < RF12_MAX_SLEN)
-                  ibuf[ipos++] = c - '0'; // HACK
+                  //ibuf[ipos++] = c - '0'; // HACK
+                  ibuf[ipos++] = c;
             } else if (len < 0 && len != EWOULDBLOCK) {
-               printf("\nerror while reading from stdin: %s.\n\n",
+               fprintf(stderr, "\nerror while reading from stdin: %s.\n\n",
                   strerror(errno));
                return -1;
+            } else {
+              // len == 0
+              fprintf(stderr, "\n end of stdin.");
+              running=0;
             }
          } else if (FD_ISSET(rfm12_fd, &fds)) {
             len = read(rfm12_fd, obuf, RF12_MAX_RLEN);
             
             if (len < 0) {
-               printf("\nerror while receiving: %s.\n\n",
+               fprintf(stderr, "\nerror while receiving: %s.\n\n",
                   strerror(errno));
                return -1;
             } else if (len > 0) {
@@ -236,8 +244,11 @@ int main(int argc, char** argv)
                jee_addr = RFM12B_JEE_ID_FROM_HDR(obuf[0]);
                jee_len = obuf[1];
                
-               printf(RECV_COLOR "<RECV CTL:%d ACK:%d DST:%d ADDR:%d LEN:%d>" STOP_COLOR " %s\n",
-                  has_ctl, has_ack, is_dst, jee_addr, jee_len, &obuf[2]);
+               fprintf(stderr,
+                   RECV_COLOR "<RECV CTL:%d ACK:%d DST:%d ADDR:%d LEN:%d>" STOP_COLOR "\n",
+                   has_ctl, has_ack, is_dst, jee_addr, jee_len);
+              
+               fprintf(stdout, "%s\n",  &obuf[2]);
                
                // in jeenode-compatible mode, the driver sends ACK packets automatically by default,
                // so we're just writing out here what the driver does internally. you do
@@ -245,11 +256,11 @@ int main(int argc, char** argv)
                if ((obuf[0] & RFM12B_JEE_HDR_ACK_BIT) && !(obuf[0] & RFM12B_JEE_HDR_CTL_BIT)) {
                   if (obuf[0] & RFM12B_JEE_HDR_DST_BIT) {
                      // if this was only sent to us, an ACK is sent as broadcast
-                     printf(SEND_COLOR "<SENT CTL:1 ACK:0 DST:0 ADDR:%d LEN:0>\n" STOP_COLOR,
+                     fprintf(stderr, SEND_COLOR "<SENT CTL:1 ACK:0 DST:0 ADDR:%d LEN:0>\n" STOP_COLOR,
                         jee_id);
                   } else {
                      // if this was a broadcast, the ACK is sent directly to the source node.
-                     printf(SEND_COLOR "<SENT CTL:1 ACK:0 DST:1 ADDR:%d LEN:0>\n" STOP_COLOR,
+                     fprintf(stderr, SEND_COLOR "<SENT CTL:1 ACK:0 DST:1 ADDR:%d LEN:0>\n" STOP_COLOR,
                         RFM12B_JEE_ID_FROM_HDR(obuf[0]));
                   }
                }
@@ -258,7 +269,7 @@ int main(int argc, char** argv)
       }
    }
    
-   printf("\n");
+   fprintf(stderr, "\n");
    print_stats(rfm12_fd);
    
    close(rfm12_fd);

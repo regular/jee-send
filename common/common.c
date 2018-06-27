@@ -19,6 +19,7 @@
 
 #include <fcntl.h>
 #include <stdio.h>
+#include <stropts.h>
 
 #include "common.h"
 #include "rfm12b_ioctl.h"
@@ -28,9 +29,9 @@ void print_stats(int fd)
    rfm12b_stats s;
    
    if (0 == ioctl(fd, RFM12B_IOCTL_GET_STATS, &s)) {
-      printf("ioctl() succeeded.\n");
+      fprintf(stderr, "ioctl() succeeded.\n");
    
-      printf(
+      fprintf(stderr,
          "\tbytes_recvd: %lu\n"
          "\tpkts_recvd: %lu\n"
          "\tbytes_sent: %lu\n"
@@ -48,7 +49,7 @@ void print_stats(int fd)
          s.low_battery, s.rssi
       );
    } else
-      printf("ioctl() failed.\n");
+      fprintf(stderr, "ioctl() failed.\n");
 }
 
 int supports_rssi(int fd)
@@ -70,6 +71,6 @@ void print_rssi(int fd)
    rfm12b_stats s;
    
    if (0 == ioctl(fd, RFM12B_IOCTL_GET_STATS, &s)) {
-      printf("\trssi: %ddbm\n", s.rssi);
+      fprintf(stderr, "\trssi: %ddbm\n", s.rssi);
    }
 }
